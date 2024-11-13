@@ -105,6 +105,7 @@ class SpaceshipPlanner:
         self.X_bar, self.U_bar, self.p_bar = self.initial_guess()
 
         self.eps = 1.0
+        self.E = np.identity(8)
 
         # Constraints
         constraints = self._get_constraints()
@@ -183,9 +184,11 @@ class SpaceshipPlanner:
             "goal_state": cvx.Parameter((6,)),
         }
         for i in range(self.params.K - 1):
-            problem_parameters["A_" + str(i)] = cvx.Parameter((64,))
-            problem_parameters["B_plus_" + str(i)] = cvx.Parameter((16,))
-            problem_parameters["r_bar_" + str(i)] = cvx.Parameter((8,))
+            problem_parameters["A_bar_" + str(i)].value = cvx.Parameter((64,))
+            problem_parameters["B_plus_bar_" + str(i)].value = cvx.Parameter((16,))
+            problem_parameters["B_minus_bar_" + str(i)].value = cvx.Parameter((16,))
+            problem_parameters["F_bar_" + str(i)].value = cvx.Parameter((8,))
+            problem_parameters["r_bar_" + str(i)].value = cvx.Parameter((8,))
 
         return problem_parameters
 
@@ -214,8 +217,19 @@ class SpaceshipPlanner:
             constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
 
         # dynamic constraints
-        for i in range(self.params.K):
-            continue
+        for i in range(self.params.K - 1):
+
+            Bpu = self.problem_parameters["B_plus_bar_" + str(i)] @ self.variables["U"][:, i + 1]
+            Bmu = self.problem_parameters["B_minus_bar_" + str(i)] @ self.variables["U"][:, i]
+            Fp = self.problem_parameters["F_bar_" + str(i)] @ self.variables["p"]
+            r = self.problem_parameters["r_bar_" + str(i)]
+
+            if i == 0:
+                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.problem_parameters["init_state"]
+            else:
+                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.variables["X"][:, i - 1]
+
+            constraints.append(self.variables["X"][:, i] == Ax + Bpu + Bmu + Fp + r)
 
         return constraints
 
@@ -225,11 +239,7 @@ class SpaceshipPlanner:
         """
         # Example objective
         # - self.variables["X"][-1:-1]
-        objective = (
-            self.params.weight_p @ self.variables["p"]
-            + cvx.norm(self.variables["X"], p=2)
-            + cvx.norm(self.variables["U"], p=2)
-        )
+        objective = self.params.weight_p @ self.variables["p"]
 
         return cvx.Minimize(objective)
 
@@ -251,12 +261,14 @@ class SpaceshipPlanner:
         print(r_bar.shape)
 
         self.problem_parameters["init_state"].value = self.X_bar[:, 0]
-        for i in range(self.params.K - 1):
-            pass
-            # self.problem_parameters["A_" + str(i)].value = A_bar[:, i]
-            # self.problem_parameters["U_" + str(i)].value = cvx.Parameter((2, 2))
-            # self.problem_parameters["p_" + str(i)].value = cvx.Parameter((1,))
         self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
+
+        for i in range(self.params.K - 1):
+            self.problem_parameters["A_bar_" + str(i)].value = A_bar[:, i]
+            self.problem_parameters["B_plus_bar_" + str(i)].value = B_plus_bar[:, i]
+            self.problem_parameters["B_minus_bar_" + str(i)].value = B_minus_bar[:, i]
+            self.problem_parameters["F_bar_" + str(i)].value = F_bar[:, i]
+            self.problem_parameters["r_bar_" + str(i)].value = r_bar[:, i]
 
     def _check_convergence(self) -> bool:
         """
