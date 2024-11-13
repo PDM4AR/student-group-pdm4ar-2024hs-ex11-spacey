@@ -128,10 +128,17 @@ class SpaceshipPlanner:
 
             self._convexification()
 
+            print(self.variables)
+
+            print(self.problem.var_dict)
+            print(self.variables["X"])
+
             try:
                 error = self.problem.solve(verbose=self.params.verbose_solver, solver=self.params.solver)
             except cvx.SolverError:
                 print(f"SolverError: {self.params.solver} failed to solve the problem.")
+
+            print(self.problem.status)
 
             if self._check_convergence():
                 break
@@ -160,9 +167,9 @@ class SpaceshipPlanner:
         Define optimisation variables for SCvx.
         """
         variables = {
-            "X": cvx.Variable((self.spaceship.n_x, self.params.K)),
-            "U": cvx.Variable((self.spaceship.n_u, self.params.K)),
-            "p": cvx.Variable(self.spaceship.n_p),
+            "X": cvx.Variable((self.spaceship.n_x, self.params.K), name="X"),
+            "U": cvx.Variable((self.spaceship.n_u, self.params.K), name="U"),
+            "p": cvx.Variable(self.spaceship.n_p, name="p"),
         }
 
         return variables
@@ -218,7 +225,11 @@ class SpaceshipPlanner:
         """
         # Example objective
         # - self.variables["X"][-1:-1]
-        objective = self.params.weight_p @ self.variables["p"]
+        objective = (
+            self.params.weight_p @ self.variables["p"]
+            + cvx.norm(self.variables["X"], p=2)
+            + cvx.norm(self.variables["U"], p=2)
+        )
 
         return cvx.Minimize(objective)
 
@@ -251,12 +262,12 @@ class SpaceshipPlanner:
         """
         Check convergence of SCvx.
         """
-        dynamic_dif = self.variables["X"] - self.X_bar
+        dynamic_dif = self.variables["X"].value - self.X_bar
         dif = np.linalg.norm(self.p_bar - self.variables["p"]) + np.max(
-            np.vstack([np.linalg.norm(dynamic_dif[:, i]) for i in range(self.params.K - 1)])
+            np.array([np.linalg.norm(dynamic_dif[:, i]) for i in range(self.params.K - 1)])
         )
 
-        return bool(np.array(dif) <= self.eps)
+        return bool(dif <= self.eps)
 
     def _update_trust_region(self):
         """
@@ -270,13 +281,13 @@ class SpaceshipPlanner:
         """
         ts = (0, 1, 2, 3, 4)
         # in case my planner returns 3 numpy arrays
-        F = np.array(self.variables["U"][0, :])
-        ddelta = np.array(self.variables["U"][1, :])
+        F = self.variables["U"][0, :].value
+        ddelta = self.variables["U"][1, :].value
         cmds_list = [SpaceshipCommands(f, dd) for f, dd in zip(F, ddelta)]
         mycmds = DgSampledSequence[SpaceshipCommands](timestamps=ts, values=cmds_list)
 
         # in case my state trajectory is in a 2d array
-        npstates = np.array(self.variables["X"]).T
+        npstates = self.variables["X"].value.T
         states = [SpaceshipState(*v) for v in npstates]
         mystates = DgSampledSequence[SpaceshipState](timestamps=ts, values=states)
         return mycmds, mystates
