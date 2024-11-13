@@ -104,6 +104,8 @@ class SpaceshipPlanner:
 
         self.X_bar, self.U_bar, self.p_bar = self.initial_guess()
 
+        self.eps = 1.0
+
         # Constraints
         constraints = self._get_constraints()
 
@@ -122,15 +124,19 @@ class SpaceshipPlanner:
         self.init_state = init_state
         self.goal_state = goal_state
 
-        #
-        # TODO: Implement SCvx algorithm or comparable
-        #
+        while True:
 
-        self._convexification()
-        try:
-            error = self.problem.solve(verbose=self.params.verbose_solver, solver=self.params.solver)
-        except cvx.SolverError:
-            print(f"SolverError: {self.params.solver} failed to solve the problem.")
+            self._convexification()
+
+            try:
+                error = self.problem.solve(verbose=self.params.verbose_solver, solver=self.params.solver)
+            except cvx.SolverError:
+                print(f"SolverError: {self.params.solver} failed to solve the problem.")
+
+            if self._check_convergence():
+                break
+
+            self._update_trust_region()
 
         # Example data: sequence from array
         mycmds, mystates = self._extract_seq_from_array()
@@ -149,13 +155,6 @@ class SpaceshipPlanner:
 
         return X, U, p
 
-    def _set_goal(self):
-        """
-        Sets goal for SCvx.
-        """
-        self.goal = cvx.Parameter((6, 1))
-        pass
-
     def _get_variables(self) -> dict:
         """
         Define optimisation variables for SCvx.
@@ -173,9 +172,13 @@ class SpaceshipPlanner:
         Define problem parameters for SCvx.
         """
         problem_parameters = {
-            "init_state": cvx.Parameter(self.spaceship.n_x)
-            # ...
+            "init_state": cvx.Parameter(self.spaceship.n_x),
+            "goal_state": cvx.Parameter((6,)),
         }
+        for i in range(self.params.K - 1):
+            problem_parameters["A_" + str(i)] = cvx.Parameter((64,))
+            problem_parameters["B_plus_" + str(i)] = cvx.Parameter((16,))
+            problem_parameters["r_bar_" + str(i)] = cvx.Parameter((8,))
 
         return problem_parameters
 
@@ -185,8 +188,28 @@ class SpaceshipPlanner:
         """
         constraints = [
             self.variables["X"][:, 0] == self.problem_parameters["init_state"],
-            # ...
+            cvx.norm(self.variables["X"][:6, -1] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
         ]
+
+        for i in range(self.params.K - 1):
+            # mass constraint
+            constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
+            # F thrust constraint
+            constraints.append(self.variables["U"][0, i] >= self.sp.thrust_limits[0])
+            constraints.append(self.variables["U"][0, i] <= self.sp.thrust_limits[1])
+            # Thrust angle constraint
+            constraints.append(self.variables["X"][6, i] >= self.sp.delta_limits[0])
+            constraints.append(self.variables["X"][6, i] <= self.sp.delta_limits[0])
+            # Time constraint
+            constraints.append(self.variables["p"][0] <= self.params.max_iterations)
+            # Rate of change constraint
+            constraints.append(self.variables["U"][1, i] >= self.sp.ddelta_limits[0])
+            constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
+
+        # dynamic constraints
+        for i in range(self.params.K):
+            continue
+
         return constraints
 
     def _get_objective(self) -> Union[cvx.Minimize, cvx.Maximize]:
@@ -194,6 +217,7 @@ class SpaceshipPlanner:
         Define objective for SCvx.
         """
         # Example objective
+        # - self.variables["X"][-1:-1]
         objective = self.params.weight_p @ self.variables["p"]
 
         return cvx.Minimize(objective)
@@ -210,15 +234,29 @@ class SpaceshipPlanner:
             self.X_bar, self.U_bar, self.p_bar
         )
 
+        print(A_bar.shape)
+        print(B_plus_bar.shape)
+        print(F_bar.shape)
+        print(r_bar.shape)
+
         self.problem_parameters["init_state"].value = self.X_bar[:, 0]
-        # ...
+        for i in range(self.params.K - 1):
+            pass
+            # self.problem_parameters["A_" + str(i)].value = A_bar[:, i]
+            # self.problem_parameters["U_" + str(i)].value = cvx.Parameter((2, 2))
+            # self.problem_parameters["p_" + str(i)].value = cvx.Parameter((1,))
+        self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
 
     def _check_convergence(self) -> bool:
         """
         Check convergence of SCvx.
         """
+        dynamic_dif = self.variables["X"] - self.X_bar
+        dif = np.linalg.norm(self.p_bar - self.variables["p"]) + np.max(
+            np.vstack([np.linalg.norm(dynamic_dif[:, i]) for i in range(self.params.K - 1)])
+        )
 
-        pass
+        return bool(np.array(dif) <= self.eps)
 
     def _update_trust_region(self):
         """
@@ -226,20 +264,19 @@ class SpaceshipPlanner:
         """
         pass
 
-    @staticmethod
-    def _extract_seq_from_array() -> tuple[DgSampledSequence[SpaceshipCommands], DgSampledSequence[SpaceshipState]]:
+    def _extract_seq_from_array(self) -> tuple[DgSampledSequence[SpaceshipCommands], DgSampledSequence[SpaceshipState]]:
         """
         Example of how to create a DgSampledSequence from numpy arrays and timestamps.
         """
         ts = (0, 1, 2, 3, 4)
         # in case my planner returns 3 numpy arrays
-        F = np.array([0, 1, 2, 3, 4])
-        ddelta = np.array([0, 0, 0, 0, 0])
+        F = np.array(self.variables["U"][0, :])
+        ddelta = np.array(self.variables["U"][1, :])
         cmds_list = [SpaceshipCommands(f, dd) for f, dd in zip(F, ddelta)]
         mycmds = DgSampledSequence[SpaceshipCommands](timestamps=ts, values=cmds_list)
 
         # in case my state trajectory is in a 2d array
-        npstates = np.random.rand(len(ts), 8)
+        npstates = np.array(self.variables["X"]).T
         states = [SpaceshipState(*v) for v in npstates]
         mystates = DgSampledSequence[SpaceshipState](timestamps=ts, values=states)
         return mycmds, mystates
