@@ -12,6 +12,7 @@ from dg_commons.sim.models.spaceship_structures import (
 )
 
 from pdm4ar.exercises.ex11.discretization import *
+from pdm4ar.exercises_def.ex09 import goal
 from pdm4ar.exercises_def.ex11.utils_params import PlanetParams, SatelliteParams
 
 
@@ -123,24 +124,25 @@ class SpaceshipPlanner:
         """
         Compute a trajectory from init_state to goal_state.
         """
-        self.init_state = init_state
-        self.goal_state = goal_state
+        #  self.init_state = init_state
+        #  self.goal_state = goal_state
+
+        # self.X_bar, self.U_bar, self.p_bar = self.initial_guess_with_goal(start, goal)
+        self.problem_parameters["init_state"].value = init_state.as_ndarray()
+        self.problem_parameters["goal_state"].value = goal_state.as_ndarray()
 
         for _ in range(self.params.max_iterations):
 
             self._convexification()
 
-            print(self.variables)
-
-            print(self.problem.var_dict)
-            print(self.variables["X"])
-
             try:
                 error = self.problem.solve(verbose=self.params.verbose_solver, solver=self.params.solver)
             except cvx.SolverError:
-                print(f"SolverError: {self.params.solver} failed to solve the problem.")
+                print(f"[!!!] SolverError: {self.params.solver} failed to solve the problem.")
 
-            print(self.problem.status)
+            print()
+            print(f"[*] SolverStatus: {self.problem.status}")
+            print()
 
             if self._check_convergence():
                 break
@@ -152,6 +154,18 @@ class SpaceshipPlanner:
 
         return mycmds, mystates
 
+    #    def initial_guess_with_goal(self, start, goal) -> tuple[NDArray, NDArray, NDArray]:
+    #        """
+    #        Define initial guess for SCvx.
+    #        """
+    #        K = self.params.K
+    #
+    #        X = np.zeros((self.spaceship.n_x, K))
+    #        U = np.zeros((self.spaceship.n_u, K))
+    #        p = np.zeros((self.spaceship.n_p))
+    #
+    #        return X, U, p
+
     def initial_guess(self) -> tuple[NDArray, NDArray, NDArray]:
         """
         Define initial guess for SCvx.
@@ -159,7 +173,7 @@ class SpaceshipPlanner:
         K = self.params.K
 
         X = np.zeros((self.spaceship.n_x, K))
-        U = np.zeros((self.spaceship.n_u, K))
+        U = np.ones((self.spaceship.n_u, K)) * 0.1
         p = np.zeros((self.spaceship.n_p))
 
         return X, U, p
@@ -205,8 +219,9 @@ class SpaceshipPlanner:
         ]
 
         for i in range(self.params.K - 1):
+
             # mass constraint
-            constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
+            # constraints.append(self.variables["X"][-1, i] >= self.sp.m_v) # TODO: initial condition with m = 0 violates the constraints
             # F thrust constraint
             constraints.append(self.variables["U"][0, i] >= self.sp.thrust_limits[0])
             constraints.append(self.variables["U"][0, i] <= self.sp.thrust_limits[1])
@@ -215,7 +230,7 @@ class SpaceshipPlanner:
             constraints.append(self.variables["X"][6, i] <= self.sp.delta_limits[1])
             # Time constraint
             constraints.append(
-                self.variables["p"][0] <= self.params.max_iterations
+                self.variables["p"][0] <= 5  # self.params.max_iterations
             )  # TODO: use max time instead of max iter
             # Rate of change constraint
             constraints.append(self.variables["U"][1, i] >= self.sp.ddelta_limits[0])
@@ -238,10 +253,10 @@ class SpaceshipPlanner:
 
         # trust region constraints
         for i in range(self.params.K):
-            dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
+            # dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
             du = cvx.norm(self.variables["U"][:, i] - self.U_bar[:, i], p=2)
             dp = cvx.norm(self.variables["p"] - self.p_bar, p=2)
-            constraints.append(dx + du + dp <= self.params.tr_radius)
+            constraints.append(du + dp <= self.params.tr_radius)
 
         return constraints
 
@@ -268,13 +283,8 @@ class SpaceshipPlanner:
             self.X_bar, self.U_bar, self.p_bar
         )
 
-        print(A_bar.shape)
-        print(B_plus_bar.shape)
-        print(F_bar.shape)
-        print(r_bar.shape)
-
-        self.problem_parameters["init_state"].value = self.X_bar[:, 0]
-        self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
+        # self.problem_parameters["init_state"].value = self.X_bar[:, 0]
+        # self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
 
         for i in range(self.params.K - 1):
             self.problem_parameters["A_bar_" + str(i)].value = A_bar[:, i].reshape((8, 8))
@@ -287,10 +297,10 @@ class SpaceshipPlanner:
         """
         Check convergence of SCvx.
         """
-        dynamic_dif = self.variables["X"].value - self.X_bar
-        dif = np.linalg.norm(self.p_bar - self.variables["p"]) + np.max(
-            np.array([np.linalg.norm(dynamic_dif[:, i]) for i in range(self.params.K - 1)])
-        )
+        x_dif = np.array(self.variables["X"].value - self.X_bar)
+        p_dif = np.array(self.p_bar - self.variables["p"].value)
+
+        dif = np.linalg.norm(p_dif) + np.max(np.array([np.linalg.norm(x_dif[:, i]) for i in range(self.params.K - 1)]))
 
         return bool(dif <= self.eps)
 
@@ -299,7 +309,7 @@ class SpaceshipPlanner:
         Update trust region radius.
         """
         # TODO: figure out how to compute rho
-        rho = 0
+        rho = 1
 
         if rho < self.params.rho_0:
             self.eta = max(self.params.min_tr_radius, self.eta / self.params.alpha)
@@ -320,15 +330,22 @@ class SpaceshipPlanner:
         """
         Example of how to create a DgSampledSequence from numpy arrays and timestamps.
         """
-        ts = (0, 1, 2, 3, 4)
         # in case my planner returns 3 numpy arrays
+        U = np.array(self.variables["U"].value)
+        X = np.array(self.variables["X"].value)
+
         F = self.variables["U"][0, :].value
         ddelta = self.variables["U"][1, :].value
         cmds_list = [SpaceshipCommands(f, dd) for f, dd in zip(F, ddelta)]
+
+        ts = list(range(len(cmds_list)))
         mycmds = DgSampledSequence[SpaceshipCommands](timestamps=ts, values=cmds_list)
 
         # in case my state trajectory is in a 2d array
         npstates = self.variables["X"].value.T
         states = [SpaceshipState(*v) for v in npstates]
         mystates = DgSampledSequence[SpaceshipState](timestamps=ts, values=states)
+
+        print(f"\n\n U: {U}  \n\n X: {X}")
+
         return mycmds, mystates
