@@ -186,11 +186,11 @@ class SpaceshipPlanner:
             "goal_state": cvx.Parameter((6,)),
         }
         for i in range(self.params.K - 1):
-            problem_parameters["A_bar_" + str(i)].value = cvx.Parameter((64,))
-            problem_parameters["B_plus_bar_" + str(i)].value = cvx.Parameter((16,))
-            problem_parameters["B_minus_bar_" + str(i)].value = cvx.Parameter((16,))
-            problem_parameters["F_bar_" + str(i)].value = cvx.Parameter((8,))
-            problem_parameters["r_bar_" + str(i)].value = cvx.Parameter((8,))
+            problem_parameters["A_bar_" + str(i)] = cvx.Parameter((8, 8))
+            problem_parameters["B_plus_bar_" + str(i)] = cvx.Parameter((8, 2))
+            problem_parameters["B_minus_bar_" + str(i)] = cvx.Parameter((8, 2))
+            problem_parameters["F_bar_" + str(i)] = cvx.Parameter((8, 1))
+            problem_parameters["r_bar_" + str(i)] = cvx.Parameter((8,))
 
         return problem_parameters
 
@@ -198,6 +198,7 @@ class SpaceshipPlanner:
         """
         Define constraints for SCvx.
         """
+        # initial state and goal state constraint
         constraints = [
             self.variables["X"][:, 0] == self.problem_parameters["init_state"],
             cvx.norm(self.variables["X"][:6, -1] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
@@ -231,13 +232,13 @@ class SpaceshipPlanner:
             else:
                 Ax = self.problem_parameters["A_bar_" + str(i)] @ self.variables["X"][:, i - 1]
 
-            constraints.append(self.variables["X"][:, i] == Ax + Bpu + Bmu + Fp + r)
+            constraints.append(self.variables["X"][:, i] == Ax + Bpu + Bmu + Fp + r + self.variables["nu"][:, i])
 
         # trust region constraints
         for i in range(self.params.K):
             dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
             du = cvx.norm(self.variables["U"][:, i] - self.U_bar[:, i], p=2)
-            dp = cvx.norm(self.variables["p"][i] - self.p_bar[i], p=2)
+            dp = cvx.norm(self.variables["p"] - self.p_bar, p=2)
             constraints.append(dx + du + dp <= self.params.tr_radius)
 
         return constraints
@@ -274,11 +275,11 @@ class SpaceshipPlanner:
         self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
 
         for i in range(self.params.K - 1):
-            self.problem_parameters["A_bar_" + str(i)].value = A_bar[:, i]
-            self.problem_parameters["B_plus_bar_" + str(i)].value = B_plus_bar[:, i]
-            self.problem_parameters["B_minus_bar_" + str(i)].value = B_minus_bar[:, i]
-            self.problem_parameters["F_bar_" + str(i)].value = F_bar[:, i]
-            self.problem_parameters["r_bar_" + str(i)].value = r_bar[:, i]
+            self.problem_parameters["A_bar_" + str(i)].value = A_bar[:, i].reshape((8, 8))
+            self.problem_parameters["B_plus_bar_" + str(i)].value = B_plus_bar[:, i].reshape((8, 2))
+            self.problem_parameters["B_minus_bar_" + str(i)].value = B_minus_bar[:, i].reshape((8, 2))
+            self.problem_parameters["F_bar_" + str(i)].value = F_bar[:, i].reshape((8, 1))
+            self.problem_parameters["r_bar_" + str(i)].value = r_bar[:, i].reshape((8,))
 
     def _check_convergence(self) -> bool:
         """
