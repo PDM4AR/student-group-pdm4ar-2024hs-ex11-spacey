@@ -106,6 +106,7 @@ class SpaceshipPlanner:
 
         self.eps = 1.0
         self.E = np.identity(8)
+        self.eta = self.params.tr_radius
 
         # Constraints
         constraints = self._get_constraints()
@@ -171,6 +172,7 @@ class SpaceshipPlanner:
             "X": cvx.Variable((self.spaceship.n_x, self.params.K), name="X"),
             "U": cvx.Variable((self.spaceship.n_u, self.params.K), name="U"),
             "p": cvx.Variable(self.spaceship.n_p, name="p"),
+            "nu": cvx.Variable((self.spaceship.n_x, self.params.K - 1), name="nu"),
         }
 
         return variables
@@ -231,15 +233,23 @@ class SpaceshipPlanner:
 
             constraints.append(self.variables["X"][:, i] == Ax + Bpu + Bmu + Fp + r)
 
+        # trust region constraints
+        for i in range(self.params.K):
+            dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
+            du = cvx.norm(self.variables["U"][:, i] - self.U_bar[:, i], p=2)
+            dp = cvx.norm(self.variables["p"][i] - self.p_bar[i], p=2)
+            constraints.append(dx + du + dp <= self.params.tr_radius)
+
         return constraints
 
     def _get_objective(self) -> Union[cvx.Minimize, cvx.Maximize]:
         """
         Define objective for SCvx.
         """
-        # Example objective
-        # - self.variables["X"][-1:-1]
-        objective = self.params.weight_p @ self.variables["p"]
+        # TODO: add mass objective: - self.variables["X"][-1:-1]
+        objective = self.params.weight_p @ self.variables["p"] + cvx.norm(
+            self.variables["nu"], p="fro"
+        )  # use frobenius norm for virtual control variables
 
         return cvx.Minimize(objective)
 
@@ -285,7 +295,23 @@ class SpaceshipPlanner:
         """
         Update trust region radius.
         """
-        pass
+        # TODO: figure out how to compute rho
+        rho = 0
+
+        if rho < self.params.rho_0:
+            self.eta = max(self.params.min_tr_radius, self.eta / self.params.alpha)
+            # don't change X_bar, U_bar, p_bar
+        else:
+            if rho < self.params.rho_1:
+                self.eta = max(self.params.min_tr_radius, self.eta / self.params.alpha)
+            elif rho < self.params.rho_2:
+                self.eta = self.eta  # do not change tr_radius
+            else:
+                self.eta = min(self.params.max_tr_radius, self.eta * self.params.beta)
+
+            self.X_bar = self.variables["X"].value
+            self.U_bar = self.variables["U"].value
+            self.p_bar = self.variables["p"].value
 
     def _extract_seq_from_array(self) -> tuple[DgSampledSequence[SpaceshipCommands], DgSampledSequence[SpaceshipState]]:
         """
