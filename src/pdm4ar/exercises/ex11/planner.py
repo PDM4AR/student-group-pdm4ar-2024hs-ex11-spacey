@@ -212,29 +212,43 @@ class SpaceshipPlanner:
         """
         Define constraints for SCvx.
         """
-        # initial state and goal state constraint
+
+        # initial state constraint
         constraints = [
             self.variables["X"][:, 0] == self.problem_parameters["init_state"],
-            cvx.norm(self.variables["X"][:6, -1] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
         ]
+
+        # initial and final inputs needs to be zero
+        constraints.append(self.variables["U"][:, 0] == 0)
+        constraints.append(self.variables["U"][:, -1] == 0)
+
+        # spaceship needs to arrive close to the goal
+        constraints.append(
+            cvx.norm(self.variables["X"][:6, -1] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
+        )
 
         for i in range(self.params.K - 1):
 
-            # mass constraint
-            # constraints.append(self.variables["X"][-1, i] >= self.sp.m_v) # TODO: initial condition with m = 0 violates the constraints
-            # F thrust constraint
+            # Control inputs, F_thrust is limited
             constraints.append(self.variables["U"][0, i] >= self.sp.thrust_limits[0])
             constraints.append(self.variables["U"][0, i] <= self.sp.thrust_limits[1])
-            # Thrust angle constraint
+
+            # Thrust angle is limited
             constraints.append(self.variables["X"][6, i] >= self.sp.delta_limits[0])
             constraints.append(self.variables["X"][6, i] <= self.sp.delta_limits[1])
+
+            # Rate of change constraint (thrust angle change speed)
+            constraints.append(self.variables["U"][1, i] >= self.sp.ddelta_limits[0])
+            constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
+
+            # spaceship’s mass should be greater than or equal to the mass of the spaceship without fuel
+            # TODO: initial condition with m = 0 violates the constraints
+            # constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
+
             # Time constraint
             constraints.append(
                 self.variables["p"][0] <= 5  # self.params.max_iterations
             )  # TODO: use max time instead of max iter
-            # Rate of change constraint
-            constraints.append(self.variables["U"][1, i] >= self.sp.ddelta_limits[0])
-            constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
 
         # dynamic constraints
         for i in range(self.params.K - 1):
@@ -282,9 +296,6 @@ class SpaceshipPlanner:
         A_bar, B_plus_bar, B_minus_bar, F_bar, r_bar = self.integrator.calculate_discretization(
             self.X_bar, self.U_bar, self.p_bar
         )
-
-        # self.problem_parameters["init_state"].value = self.X_bar[:, 0]
-        # self.problem_parameters["goal_state"].value = self.goal_state.as_ndarray()
 
         for i in range(self.params.K - 1):
             self.problem_parameters["A_bar_" + str(i)].value = A_bar[:, i].reshape((8, 8))
@@ -346,6 +357,6 @@ class SpaceshipPlanner:
         states = [SpaceshipState(*v) for v in npstates]
         mystates = DgSampledSequence[SpaceshipState](timestamps=ts, values=states)
 
-        print(f"\n\n U: {U}  \n\n X: {X}")
+        print(f"\n\n U:\n {U.T}  \n\n X:\n {X.T}")
 
         return mycmds, mystates
