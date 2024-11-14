@@ -126,7 +126,7 @@ class SpaceshipPlanner:
         self.init_state = init_state
         self.goal_state = goal_state
 
-        while True:
+        for _ in range(self.params.max_iterations):
 
             self._convexification()
 
@@ -212,9 +212,11 @@ class SpaceshipPlanner:
             constraints.append(self.variables["U"][0, i] <= self.sp.thrust_limits[1])
             # Thrust angle constraint
             constraints.append(self.variables["X"][6, i] >= self.sp.delta_limits[0])
-            constraints.append(self.variables["X"][6, i] <= self.sp.delta_limits[0])
+            constraints.append(self.variables["X"][6, i] <= self.sp.delta_limits[1])
             # Time constraint
-            constraints.append(self.variables["p"][0] <= self.params.max_iterations)
+            constraints.append(
+                self.variables["p"][0] <= self.params.max_iterations
+            )  # TODO: use max time instead of max iter
             # Rate of change constraint
             constraints.append(self.variables["U"][1, i] >= self.sp.ddelta_limits[0])
             constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
