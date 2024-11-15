@@ -25,7 +25,7 @@ class SolverParameters:
 
     # Cvxpy solver parameters
     solver: str = "ECOS"  # specify solver to use
-    verbose_solver: bool = False  # if True, the optimization steps are shown
+    verbose_solver: bool = True  # if True, the optimization steps are shown
     max_iterations: int = 100  # max algorithm iterations
 
     # SCVX parameters (Add paper reference)
@@ -173,7 +173,8 @@ class SpaceshipPlanner:
         K = self.params.K
 
         X = np.zeros((self.spaceship.n_x, K))
-        U = np.ones((self.spaceship.n_u, K)) * 0.1
+        X[-1, :] = 2 * self.sp.m_v  # TODO: set the initial mass smarter
+        U = np.zeros((self.spaceship.n_u, K))
         p = np.zeros((self.spaceship.n_p))
 
         return X, U, p
@@ -221,10 +222,14 @@ class SpaceshipPlanner:
         # initial and final inputs needs to be zero
         constraints.append(self.variables["U"][:, 0] == 0)
         constraints.append(self.variables["U"][:, -1] == 0)
+        constraints.append(self.variables["U"][:, -2] == 0)
 
         # spaceship needs to arrive close to the goal
         constraints.append(
             cvx.norm(self.variables["X"][:6, -1] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
+        )
+        constraints.append(
+            cvx.norm(self.variables["X"][:6, -2] - self.problem_parameters["goal_state"]) <= self.params.stop_crit,
         )
 
         for i in range(self.params.K - 1):
@@ -243,7 +248,7 @@ class SpaceshipPlanner:
 
             # spaceship’s mass should be greater than or equal to the mass of the spaceship without fuel
             # TODO: initial condition with m = 0 violates the constraints
-            # constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
+            constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
 
             # Time constraint
             constraints.append(
@@ -253,21 +258,22 @@ class SpaceshipPlanner:
         # dynamic constraints
         for i in range(self.params.K - 1):
 
+            Ax = self.problem_parameters["A_bar_" + str(i)] @ self.variables["X"][:, i]
             Bpu = self.problem_parameters["B_plus_bar_" + str(i)] @ self.variables["U"][:, i + 1]
             Bmu = self.problem_parameters["B_minus_bar_" + str(i)] @ self.variables["U"][:, i]
             Fp = self.problem_parameters["F_bar_" + str(i)] @ self.variables["p"]
             r = self.problem_parameters["r_bar_" + str(i)]
 
-            if i == 0:
-                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.problem_parameters["init_state"]
-            else:
-                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.variables["X"][:, i - 1]
-
-            constraints.append(self.variables["X"][:, i] == Ax + Bpu + Bmu + Fp + r + self.variables["nu"][:, i])
+            #            if i == 0:
+            #                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.problem_parameters["init_state"]
+            #            else:
+            #                Ax = self.problem_parameters["A_bar_" + str(i)] @ self.variables["X"][:, i - 1]
+            #
+            constraints.append(self.variables["X"][:, i + 1] == Ax + Bpu + Bmu + Fp + r + self.variables["nu"][:, i])
 
         # trust region constraints
         for i in range(self.params.K):
-            # dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
+            dx = cvx.norm(self.variables["X"][:, i] - self.X_bar[:, i], p=2)
             du = cvx.norm(self.variables["U"][:, i] - self.U_bar[:, i], p=2)
             dp = cvx.norm(self.variables["p"] - self.p_bar, p=2)
             constraints.append(du + dp <= self.params.tr_radius)
@@ -320,7 +326,7 @@ class SpaceshipPlanner:
         Update trust region radius.
         """
         # TODO: figure out how to compute rho
-        rho = 1
+        rho = 1000000000000000
 
         if rho < self.params.rho_0:
             self.eta = max(self.params.min_tr_radius, self.eta / self.params.alpha)
@@ -333,9 +339,9 @@ class SpaceshipPlanner:
             else:
                 self.eta = min(self.params.max_tr_radius, self.eta * self.params.beta)
 
-            self.X_bar = self.variables["X"].value
-            self.U_bar = self.variables["U"].value
-            self.p_bar = self.variables["p"].value
+        self.X_bar = self.variables["X"].value
+        self.U_bar = self.variables["U"].value
+        self.p_bar = self.variables["p"].value
 
     def _extract_seq_from_array(self) -> tuple[DgSampledSequence[SpaceshipCommands], DgSampledSequence[SpaceshipState]]:
         """
@@ -357,6 +363,8 @@ class SpaceshipPlanner:
         states = [SpaceshipState(*v) for v in npstates]
         mystates = DgSampledSequence[SpaceshipState](timestamps=ts, values=states)
 
-        print(f"\n\n U:\n {U.T}  \n\n X:\n {X.T}")
+        np.set_printoptions(precision=2)
+        np.set_printoptions(linewidth=200)
+        print(f"\n\n U:\n{U.T}  \n\n X:\n{X.T} \n\n nu:\n{self.variables['nu'].value.T}")
 
         return mycmds, mystates
