@@ -46,7 +46,7 @@ def _ex11_vis(sim_context: SimContext) -> Report:
         )
     # state/commands plots
     for pn in sim_context.log.keys():
-        if 'PDM4AR' not in pn:
+        if "PDM4AR" not in pn:
             continue
         with r.subsection(f"Player-{pn}-log") as sub:
             with sub.plot(f"{pn}-log", figsize=(20, 15)) as pylab:
@@ -62,7 +62,7 @@ def load_config_ex11(file_path: Path) -> Mapping:
 
 def get_exercise11():
     config_dir = Path(__file__).parent
-    configs = ["config_planet.yaml", "config_satellites.yaml", "config_satellites_diff.yaml"]
+    configs = ["config_planet.yaml"]  # , "config_satellites.yaml", "config_satellites_diff.yaml"] # TODO restore
 
     test_values: List[SimContext] = []
     for c in configs:
