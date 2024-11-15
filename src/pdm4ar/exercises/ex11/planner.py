@@ -255,7 +255,6 @@ class SpaceshipPlanner:
             constraints.append(self.variables["U"][1, i] <= self.sp.ddelta_limits[1])
 
             # spaceship’s mass should be greater than or equal to the mass of the spaceship without fuel
-            # TODO: initial condition with m = 0 violates the constraints
             constraints.append(self.variables["X"][-1, i] >= self.sp.m_v)
 
             # Time constraint
@@ -277,7 +276,7 @@ class SpaceshipPlanner:
             dx = cvx.norm(self.variables["X"][:, i] - self.problem_parameters["X_bar"][:, i], p=2)
             du = cvx.norm(self.variables["U"][:, i] - self.problem_parameters["U_bar"][:, i], p=2)
             dp = cvx.norm(self.variables["p"] - self.problem_parameters["p_bar"], p=2)
-            constraints.append(du + dp <= self.params.tr_radius)
+            constraints.append(dx + du + dp <= self.params.tr_radius)
 
         return constraints
 
